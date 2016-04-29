@@ -1,7 +1,8 @@
 __all__ = ['PlaneStrainTria3', 'PlaneStressTria3',
            'PlaneStrainQuad4BBar', 'PlaneStrainQuad4', 'PlaneStrainQuad4Reduced',
            'PlaneStrainQuad4SelectiveReduced', 'PlaneStressQuad4',
-           'AxiSymmetricQuad4',
+           'AxiSymmetricQuad4', 'AxiSymmetricQuad4SelectiveReduced',
+           'AxiSymmetricQuad4Reduced',
            'PlaneStressQuad4Incompat', 'PlaneStrainQuad8BBar',
            'PlaneStrainQuad8', 'PlaneStrainQuad8Reduced', 'PlaneStressQuad8',
            'CSDIsoParametricElement', 'IsoPElement']
@@ -18,6 +19,8 @@ from .CSDQ4ER import PlaneStrainQuad4Reduced
 from .CSDQ4ES import PlaneStrainQuad4SelectiveReduced
 
 from .CSDAX4F import AxiSymmetricQuad4
+from .CSDAX4S import AxiSymmetricQuad4SelectiveReduced
+from .CSDAX4R import AxiSymmetricQuad4Reduced
 
 from .CSDQ4SF import PlaneStressQuad4
 from .CSDQ4SI import PlaneStressQuad4Incompat

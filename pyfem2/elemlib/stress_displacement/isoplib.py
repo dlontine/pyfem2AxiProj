@@ -283,13 +283,23 @@ class CSDIsoParametricElement(Element):
 
         if compute_stiff and self.incompatible_modes:
             Ke -= dot(dot(Kci, inv(Kii)), Kci.T)
-
-        if compute_stiff and self.selective_reduced:
-            Ke += self.sri_correction(u, du, time, dtime, kstep, kframe,
+        
+        #######################################################################
+        ############## SELECTIVE REDUCED ######################################
+        #Axisymmetric case structure for selective reduced.
+        if self.axisymmetric:
+            if compute_stiff and self.selective_reduced and self.axisymmetric:
+                Ke += self.sri_correction_axi(u, du, time, dtime, kstep, kframe,
                                       svars, predef, nlgeom)
+            if compute_stiff and self.hourglass_control:
+                Ke += self.hourglass_correction_axi(u, du, nlgeom)
+        else:
+            if compute_stiff and self.selective_reduced:
+                Ke += self.sri_correction(u, du, time, dtime, kstep, kframe,
+                                      svars, predef, nlgeom)
+            if compute_stiff and self.hourglass_control:
+                Ke += self.hourglass_correction(u, du, nlgeom)            
 
-        if compute_stiff and self.hourglass_control:
-            Ke += self.hourglass_correction(u, du, nlgeom)
 
         if cflag == STIFF_ONLY:
             return Ke
@@ -308,17 +318,21 @@ class CSDIsoParametricElement(Element):
                 else:
                     logging.warn('UNRECOGNIZED DLOAD FLAG')
 
-        if step_type not in (GENERAL, DYNAMIC) and compute_force:
-            eresid = zeros_like(xforce)
+        if step_type in (GENERAL, DYNAMIC) and compute_force:
+            # SUBTRACT RESIDUAL FROM INTERNAL FORCE
+            rhs = xforce - eresid
+
+        else:
+            rhs = xforce
 
         if cflag == STIFF_AND_RHS:
-            return Ke, xforce, eresid
+            return Ke, rhs
 
         elif cflag == RHS_ONLY:
-            return xforce, eresid
+            return rhs
 
         elif cflag == MASS_AND_RHS:
-            return Me, xforce, eresid
+            return Me, rhs
 
     def surface_force(self, edge, qe):
 
@@ -467,3 +481,114 @@ class CSDIsoParametricElement(Element):
             Ksri += J * w * dot(dot(B.T, D1), B)
 
         return Ksri
+        
+    def sri_correction_axi(self, u, du, time, dtime, kstep, kframe, svars, predef,
+                       nlgeom):
+        # SELECTIVE REDUCED INTEGRATION CORRECTION
+
+        n = self.numdof
+        Ksri = zeros((n, n))
+
+        # EVALUATE MATERIAL MODEL AT ELEMENT CENTROID
+        xi = self.cp
+        xc = self.xc
+
+        # SHAPE FUNCTION AND GRADIENT
+        Ne = self.shape(xi)
+
+        # SHAPE FUNCTION DERIVATIVE AT GAUSS POINTS
+        dNdxi = self.shapegrad(xi)
+
+        # JACOBIAN TO NATURAL COORDINATES
+        dxdxi = dot(dNdxi, xc)
+        dxidx = inv(dxdxi)
+        J = det(dxdxi)
+
+        # CONVERT SHAPE FUNCTION DERIVATIVES TO DERIVATIVES WRT GLOBAL X
+        dNdx = dot(dxidx, dNdxi)
+        B = self.bmatrix(dNdx, Ne, xi)
+
+        # STRAIN INCREMENT
+        de = dot(B, du)
+
+        # SET DEFORMATION GRADIENT TO THE IDENTITY
+        F0 = eye(self.ndir+self.nshr)
+        F = eye(self.ndir+self.nshr)
+
+        # PREDEF AND INCREMENT
+        temp = dot(Ne, predef[0,0])
+        dtemp = dot(Ne, predef[1,0])
+
+        # MATERIAL RESPONSE AT CENTROID
+        v = [x[0] for x in self.variables()]
+        a1, a2, a3 = [v.index(x) for x in ('E', 'DE', 'S')]
+        e = self.interpolate_to_centroid(svars[0], index=a1)
+        s = self.interpolate_to_centroid(svars[0], index=a3)
+        xv = zeros(1)
+        s, xv, D = self.material.response(
+            s, xv, e, de, time, dtime, temp, dtemp, None, None,
+            self.ndir, self.nshr, self.ndir+self.nshr, xc, F0, F,
+            self.label, kstep, kframe)
+        D1, D2 = iso_dev_split(self.ndir, self.nshr, self.dimensions, D)
+
+        # GAUSS INTEGRATION
+        for p in range(len(self.srip)):
+            xi = self.srip[p]
+            w = self.sriw[p]
+            dNdxi = self.shapegrad(xi)
+            dxdxi = dot(dNdxi, xc)
+            dxidx = inv(dxdxi)
+            J = det(dxdxi)
+            Ne = self.shape(xi)
+            dNdx = dot(dxidx, dNdxi)
+            B = self.bmatrix(dNdx, Ne, xi)
+            rp = dot(Ne, self.xc[:,0])
+            Ksri += J * rp * w * dot(dot(B.T, D1), B)
+
+        return Ksri
+
+    def hourglass_correction_axi(self, u, du, nlgeom):
+
+        # PERFORM HOURGLASS CORRECTION
+        xc = self.xc
+        n = self.numdof
+        Khg = zeros((n, n))
+        for p in range(len(self.hglassp)):
+
+            # SHAPE FUNCTION DERIVATIVE AT HOURGLASS GAUSS POINTS
+            xi = array(self.hglassp[p])
+            dNdxi = self.shapegrad(xi)
+
+            # JACOBIAN TO NATURAL COORDINATES
+            Ne = self.shape(xi)
+            dxdxi = dot(dNdxi, xc)
+            dxidx = inv(dxdxi)
+            dNdx = dot(dxidx, dNdxi)
+            B = self.bmatrix(dNdx, Ne, xi)
+            J = det(dxdxi)
+
+            # HOURGLASS BASE VECTORS
+            g = array(self.hglassv[p])
+            for i in range(len(xi)):
+                xi[i] = dot(g, xc[:,i])
+
+            # CORRECT THE BASE VECTORS TO ENSURE ORTHOGONALITY
+            scale = 0.
+            for a in range(self.nodes):
+                for i in range(self.dimensions):
+                    g[a] -= xi[i] * dNdx[i,a]
+                    scale += dNdx[i,a] * dNdx[i,a]
+            scale *= .01 * self.material.G
+
+            for a in range(self.nodes):
+                n1 = count_digits(self.signature[a])
+                for i in range(n1):
+                    for b in range(self.nodes):
+                        n2 = count_digits(self.signature[b])
+                        for j in range(n2):
+                            K = n1 * a + i
+                            L = n2 * b + j
+                            rp = dot(Ne, self.xc[:,0])
+                            Khg[K,L] += scale * g[a] * g[b] * J * rp * 4.
+
+        return Khg
